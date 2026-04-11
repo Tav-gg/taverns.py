@@ -125,6 +125,7 @@ messages = await client.rest.get_messages(tavern_id, channel_id, limit=50)
 
 ## Links
 
+- [PyPI package](https://pypi.org/project/taverns.py/)
 - [API Documentation](https://tav.gg/developers/docs)
 - [Developer Portal](https://tav.gg/developers/home)
-- [taverns.js](../taverns.js/) (Node.js SDK)
+- [taverns.js](https://github.com/Tav-gg/taverns.js) (Node.js SDK)
