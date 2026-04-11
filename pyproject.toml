@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taverns.py"
+version = "0.1.0"
+description = "Python SDK for building Tavern bots"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.9",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+dev = ["mypy", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["taverns*"]
