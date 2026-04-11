@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.jpg" alt="taverns.py" width="100%" />
+</p>
+
 # taverns.py
 
 Python SDK for building Tavern bots on the [Taverns](https://tav.gg) platform.
