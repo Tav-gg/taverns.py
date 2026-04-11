@@ -20,6 +20,7 @@ Quick start::
 
 from .client import Client
 from .commands import command, option
+from .embed import Embed, EmbedBuilder, EmbedField, EmbedFooter, EmbedImage
 from .errors import (
     AuthenticationError,
     GatewayError,
@@ -45,7 +46,7 @@ from .types import (
 )
 from .webhook import verify_webhook_signature
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     # Core
@@ -63,6 +64,12 @@ __all__ = [
     "BotSelf",
     "CommandOption",
     "CommandOptionType",
+    # Embeds
+    "Embed",
+    "EmbedBuilder",
+    "EmbedField",
+    "EmbedFooter",
+    "EmbedImage",
     # Interactions
     "Interaction",
     # Commands

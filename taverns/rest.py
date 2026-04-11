@@ -8,6 +8,7 @@ from typing import Any
 
 import aiohttp
 
+from .embed import Embed
 from .errors import AuthenticationError, HTTPError, RateLimitError
 from .types import BotCommand, BotSelf, Channel, Member, Message, Tavern
 
@@ -35,7 +36,7 @@ class RESTClient:
                 headers={
                     "Authorization": f"Bot {self._token}",
                     "Content-Type": "application/json",
-                    "User-Agent": "taverns.py/0.1.0",
+                    "User-Agent": "taverns.py/0.2.0",
                 },
                 timeout=aiohttp.ClientTimeout(total=30),
             )
@@ -111,19 +112,37 @@ class RESTClient:
         return [Member.from_dict(m) for m in data]
 
     async def send_message(
-        self, tavern_id: str, channel_id: str, *, content: str, reply_to_id: str | None = None,
+        self,
+        tavern_id: str,
+        channel_id: str,
+        *,
+        content: str,
+        reply_to_id: str | None = None,
+        embeds: list[Embed] | None = None,
     ) -> Message:
         body: dict[str, Any] = {"content": content}
         if reply_to_id:
             body["replyToId"] = reply_to_id
+        if embeds:
+            body["embeds"] = [e.to_dict() for e in embeds]
         data = await self.request(
             "POST", f"/taverns/{tavern_id}/channels/{channel_id}/messages", json=body,
         )
         return Message.from_dict(data)
 
-    async def edit_message(self, tavern_id: str, message_id: str, *, content: str) -> None:
+    async def edit_message(
+        self,
+        tavern_id: str,
+        message_id: str,
+        *,
+        content: str,
+        embeds: list[Embed] | None = None,
+    ) -> None:
+        body: dict[str, Any] = {"content": content}
+        if embeds:
+            body["embeds"] = [e.to_dict() for e in embeds]
         await self.request(
-            "PATCH", f"/taverns/{tavern_id}/messages/{message_id}", json={"content": content},
+            "PATCH", f"/taverns/{tavern_id}/messages/{message_id}", json=body,
         )
 
     async def delete_message(self, tavern_id: str, message_id: str) -> None:
@@ -157,11 +176,18 @@ class RESTClient:
     # ─── Interactions ────────────────────────────────────
 
     async def reply_to_interaction(
-        self, interaction_id: str, *, content: str, ephemeral: bool = False,
+        self,
+        interaction_id: str,
+        *,
+        content: str,
+        ephemeral: bool = False,
+        embeds: list[Embed] | None = None,
     ) -> None:
+        body: dict[str, Any] = {"content": content, "ephemeral": ephemeral}
+        if embeds:
+            body["embeds"] = [e.to_dict() for e in embeds]
         await self.request(
-            "POST", f"/interactions/{interaction_id}/callback",
-            json={"content": content, "ephemeral": ephemeral},
+            "POST", f"/interactions/{interaction_id}/callback", json=body,
         )
 
     async def defer_interaction(
@@ -173,9 +199,67 @@ class RESTClient:
         )
 
     async def follow_up_interaction(
-        self, interaction_id: str, *, content: str, ephemeral: bool = False,
+        self,
+        interaction_id: str,
+        *,
+        content: str,
+        ephemeral: bool = False,
+        embeds: list[Embed] | None = None,
     ) -> None:
+        body: dict[str, Any] = {"content": content, "ephemeral": ephemeral}
+        if embeds:
+            body["embeds"] = [e.to_dict() for e in embeds]
         await self.request(
-            "POST", f"/interactions/{interaction_id}/followup",
-            json={"content": content, "ephemeral": ephemeral},
+            "POST", f"/interactions/{interaction_id}/followup", json=body,
         )
+
+    # ─── Pins ────────────────────────────────────────────
+
+    async def pin_message(self, tavern_id: str, message_id: str) -> None:
+        await self.request("POST", f"/taverns/{tavern_id}/messages/{message_id}/pin")
+
+    async def unpin_message(self, tavern_id: str, message_id: str) -> None:
+        await self.request("DELETE", f"/taverns/{tavern_id}/messages/{message_id}/pin")
+
+    async def get_pinned_messages(self, tavern_id: str, channel_id: str) -> list[Message]:
+        data = await self.request("GET", f"/taverns/{tavern_id}/channels/{channel_id}/pins")
+        return [Message.from_dict(m) for m in data]
+
+    # ─── Reactions ───────────────────────────────────────
+
+    async def add_reaction(self, tavern_id: str, message_id: str, emoji: str) -> None:
+        await self.request(
+            "POST", f"/taverns/{tavern_id}/messages/{message_id}/reactions",
+            json={"emoji": emoji},
+        )
+
+    async def remove_reaction(self, tavern_id: str, message_id: str, emoji: str) -> None:
+        from urllib.parse import quote
+        await self.request(
+            "DELETE", f"/taverns/{tavern_id}/messages/{message_id}/reactions/{quote(emoji)}",
+        )
+
+    # ─── Members (extended) ─────────────────────────────
+
+    async def get_member(self, tavern_id: str, user_id: str) -> Member:
+        data = await self.request("GET", f"/taverns/{tavern_id}/members/{user_id}")
+        return Member.from_dict(data)
+
+    # ─── Search ──────────────────────────────────────────
+
+    async def search_messages(
+        self, tavern_id: str, *, query: str, channel_id: str | None = None, limit: int = 25,
+    ) -> list[Message]:
+        params: dict[str, str] = {"q": query, "limit": str(limit)}
+        if channel_id:
+            path = f"/taverns/{tavern_id}/channels/{channel_id}/messages/search"
+        else:
+            path = f"/taverns/{tavern_id}/messages/search"
+        data = await self.request("GET", path, params=params)
+        msgs = data.get("messages", data) if isinstance(data, dict) else data
+        return [Message.from_dict(m) for m in msgs]
+
+    # ─── Roles ───────────────────────────────────────────
+
+    async def get_roles(self, tavern_id: str) -> list[dict]:
+        return await self.request("GET", f"/taverns/{tavern_id}/roles")

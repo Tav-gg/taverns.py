@@ -151,6 +151,11 @@ class Gateway:
             except websockets.exceptions.ConnectionClosed:
                 break
 
+    async def send(self, action: str, data: dict[str, Any] | None = None) -> None:
+        """Send a gateway action (e.g., typing indicator)."""
+        if self._ws:
+            await self._ws.send(json.dumps({"action": action, "data": data or {}}))
+
     async def disconnect(self) -> None:
         """Gracefully disconnect from the gateway."""
         self._running = False

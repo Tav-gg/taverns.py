@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .embed import Embed
     from .rest import RESTClient
+    from .types import Message
 
 
 @dataclass
@@ -43,17 +45,24 @@ class Interaction:
             _rest=rest,
         )
 
-    async def reply(self, content: str, *, ephemeral: bool = False) -> None:
+    async def reply(
+        self,
+        content: str,
+        *,
+        ephemeral: bool = False,
+        embeds: list[Embed] | None = None,
+    ) -> None:
         """Send an immediate reply to this interaction.
 
         Args:
             content: The response text (max 4000 chars).
             ephemeral: If True, only the invoking user sees this response.
+            embeds: Optional list of rich embeds to attach.
         """
         if not self._rest:
             raise RuntimeError("Interaction is not bound to a REST client")
         await self._rest.reply_to_interaction(
-            self.id, content=content, ephemeral=ephemeral,
+            self.id, content=content, ephemeral=ephemeral, embeds=embeds,
         )
 
     async def defer_reply(self, *, ephemeral: bool = False) -> None:
@@ -65,17 +74,37 @@ class Interaction:
             raise RuntimeError("Interaction is not bound to a REST client")
         await self._rest.defer_interaction(self.id, ephemeral=ephemeral)
 
-    async def follow_up(self, content: str, *, ephemeral: bool = False) -> None:
+    async def follow_up(
+        self,
+        content: str,
+        *,
+        ephemeral: bool = False,
+        embeds: list[Embed] | None = None,
+    ) -> None:
         """Send a follow-up message after deferring.
 
         Args:
             content: The follow-up text.
             ephemeral: If True, only the invoking user sees this response.
+            embeds: Optional list of rich embeds to attach.
         """
         if not self._rest:
             raise RuntimeError("Interaction is not bound to a REST client")
         await self._rest.follow_up_interaction(
-            self.id, content=content, ephemeral=ephemeral,
+            self.id, content=content, ephemeral=ephemeral, embeds=embeds,
+        )
+
+    async def send_message(
+        self,
+        content: str,
+        *,
+        embeds: list[Embed] | None = None,
+    ) -> Message:
+        """Send a regular message to the channel where the interaction was invoked."""
+        if not self._rest:
+            raise RuntimeError("Interaction is not bound to a REST client")
+        return await self._rest.send_message(
+            self.tavern_id, self.channel_id, content=content, embeds=embeds,
         )
 
     def get_option(self, name: str, default: Any = None) -> Any:

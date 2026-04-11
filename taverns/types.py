@@ -106,17 +106,20 @@ class Message:
     tavern_id: str = ""
     reply_to_id: str | None = None
     metadata: dict = field(default_factory=dict)
+    sender_is_bot: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> Message:
+        sender = data.get("sender", {})
         return cls(
             id=data.get("id", ""),
             channel_id=data.get("channelId", ""),
             content=data.get("content", ""),
-            sender_id=data.get("senderId", ""),
+            sender_id=sender.get("id", data.get("senderId", "")),
             tavern_id=data.get("tavernId", ""),
             reply_to_id=data.get("replyToId"),
             metadata=data.get("metadata", {}),
+            sender_is_bot=sender.get("isBot", False),
         )
 
 

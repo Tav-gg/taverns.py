@@ -24,6 +24,7 @@ import asyncio
 import logging
 from typing import Any, Callable, Coroutine
 
+from .embed import Embed
 from .gateway import Gateway
 from .interaction import Interaction
 from .rest import RESTClient
@@ -116,12 +117,27 @@ class Client:
     # ─── Convenience methods ─────────────────────────────
 
     async def send_message(
-        self, tavern_id: str, channel_id: str, *, content: str, reply_to_id: str | None = None,
+        self,
+        tavern_id: str,
+        channel_id: str,
+        *,
+        content: str,
+        reply_to_id: str | None = None,
+        embeds: list[Embed] | None = None,
     ) -> Message:
         """Send a message to a channel."""
         return await self.rest.send_message(
-            tavern_id, channel_id, content=content, reply_to_id=reply_to_id,
+            tavern_id, channel_id, content=content, reply_to_id=reply_to_id, embeds=embeds,
         )
+
+    async def start_typing(self, tavern_id: str, channel_id: str) -> None:
+        """Send a typing indicator to a channel."""
+        if self._gateway and self._gateway.is_connected:
+            await self._gateway.send("tavern_typing_start", {"tavernId": tavern_id, "channelId": channel_id})
+
+    async def get_member(self, tavern_id: str, user_id: str) -> Member:
+        """Get a specific member of a tavern."""
+        return await self.rest.get_member(tavern_id, user_id)
 
     async def register_commands(self, commands: list[dict[str, Any]]) -> list[BotCommand]:
         """Register slash commands for this bot.
