@@ -47,7 +47,7 @@ class Interaction:
 
     async def reply(
         self,
-        content: str,
+        content: str = "",
         *,
         ephemeral: bool = False,
         embeds: list[Embed] | None = None,
@@ -76,7 +76,7 @@ class Interaction:
 
     async def follow_up(
         self,
-        content: str,
+        content: str = "",
         *,
         ephemeral: bool = False,
         embeds: list[Embed] | None = None,
@@ -96,7 +96,7 @@ class Interaction:
 
     async def send_message(
         self,
-        content: str,
+        content: str = "",
         *,
         embeds: list[Embed] | None = None,
     ) -> Message:

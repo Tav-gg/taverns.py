@@ -83,7 +83,10 @@ class RESTClient:
                 if resp.status == 204:
                     return None
 
-                body = await resp.json() if resp.content_length else None
+                try:
+                    body = await resp.json()
+                except Exception:
+                    body = None
 
                 if resp.status >= 400:
                     msg = body.get("message", str(resp.status)) if body else str(resp.status)
@@ -160,11 +163,10 @@ class RESTClient:
     # ─── Slash Commands ──────────────────────────────────
 
     async def register_commands(self, commands: list[dict[str, Any]]) -> list[BotCommand]:
-        results = []
-        for cmd in commands:
-            data = await self.request("POST", "/bot/applications/@me/commands", json=cmd)
-            results.append(BotCommand.from_dict(data))
-        return results
+        data = await self.request("PUT", "/bots/@me/commands", json=commands)
+        if not data:
+            return []
+        return [BotCommand.from_dict(c) for c in data]
 
     async def get_commands(self) -> list[BotCommand]:
         data = await self.request("GET", "/bot/applications/@me/commands")

@@ -123,6 +123,7 @@ class Gateway:
             try:
                 async for raw in ws:
                     try:
+                        logger.debug("Gateway raw message: %s", raw[:200] if isinstance(raw, str) else str(raw)[:200])
                         data = json.loads(raw)
                         event_name = data.get("event", "")
                         event_data = data.get("data", {})
