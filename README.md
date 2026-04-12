@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.jpg" alt="taverns.py" width="100%" />
+  <img src="https://raw.githubusercontent.com/Tav-gg/taverns.py/main/assets/banner.jpg" alt="taverns.py" width="100%" />
 </p>
 
 # taverns.py
