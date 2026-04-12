@@ -36,7 +36,7 @@ class RESTClient:
                 headers={
                     "Authorization": f"Bot {self._token}",
                     "Content-Type": "application/json",
-                    "User-Agent": "taverns.py/0.2.0",
+                    "User-Agent": "taverns.py/0.2.2",
                 },
                 timeout=aiohttp.ClientTimeout(total=30),
             )
