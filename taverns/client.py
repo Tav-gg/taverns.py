@@ -139,6 +139,56 @@ class Client:
         """Get a specific member of a tavern."""
         return await self.rest.get_member(tavern_id, user_id)
 
+    # ─── Member moderation ───────────────────────────────
+    # Require the matching granted permission (KICK_MEMBERS / BAN_MEMBERS /
+    # MUTE_MEMBERS). The tavern owner is immune to all three — the API rejects
+    # any attempt to kick, ban, or mute the owner.
+
+    async def kick_member(self, tavern_id: str, user_id: str, *, reason: str | None = None) -> None:
+        """Kick a member from a tavern (requires KICK_MEMBERS)."""
+        await self.rest.kick_member(tavern_id, user_id, reason=reason)
+
+    async def ban_member(
+        self,
+        tavern_id: str,
+        user_id: str,
+        *,
+        reason: str | None = None,
+        delete_message_seconds: int | None = None,
+        auto: bool = False,
+    ) -> None:
+        """Ban a member from a tavern (requires BAN_MEMBERS)."""
+        await self.rest.ban_member(
+            tavern_id, user_id,
+            reason=reason, delete_message_seconds=delete_message_seconds, auto=auto,
+        )
+
+    async def unban_member(self, tavern_id: str, user_id: str) -> None:
+        """Lift a ban (requires BAN_MEMBERS)."""
+        await self.rest.unban_member(tavern_id, user_id)
+
+    async def mute_member(
+        self,
+        tavern_id: str,
+        user_id: str,
+        *,
+        reason: str | None = None,
+        duration_minutes: int | None = None,
+        type: str | None = None,
+        scope: str | None = None,
+        channel_ids: list[str] | None = None,
+    ) -> None:
+        """Mute/timeout a member (requires MUTE_MEMBERS). Omit duration for permanent."""
+        await self.rest.mute_member(
+            tavern_id, user_id,
+            reason=reason, duration_minutes=duration_minutes,
+            type=type, scope=scope, channel_ids=channel_ids,
+        )
+
+    async def unmute_member(self, tavern_id: str, user_id: str) -> None:
+        """Remove an active mute (requires MUTE_MEMBERS)."""
+        await self.rest.unmute_member(tavern_id, user_id)
+
     async def register_commands(self, commands: list[dict[str, Any]]) -> list[BotCommand]:
         """Register slash commands for this bot.
 

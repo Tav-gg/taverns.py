@@ -36,7 +36,7 @@ class RESTClient:
                 headers={
                     "Authorization": f"Bot {self._token}",
                     "Content-Type": "application/json",
-                    "User-Agent": "taverns.py/0.2.2",
+                    "User-Agent": "taverns.py/0.2.4",
                 },
                 timeout=aiohttp.ClientTimeout(total=30),
             )
@@ -246,6 +246,72 @@ class RESTClient:
     async def get_member(self, tavern_id: str, user_id: str) -> Member:
         data = await self.request("GET", f"/taverns/{tavern_id}/members/{user_id}")
         return Member.from_dict(data)
+
+    # ─── Member Moderation ──────────────────────────────
+    # Each requires the matching granted permission (KICK_MEMBERS /
+    # BAN_MEMBERS / MUTE_MEMBERS). The tavern owner is immune to all three —
+    # the API rejects any attempt to kick, ban, or mute the owner.
+
+    async def kick_member(
+        self, tavern_id: str, user_id: str, *, reason: str | None = None,
+    ) -> None:
+        """Kick a member from a tavern (requires KICK_MEMBERS)."""
+        await self.request(
+            "DELETE", f"/taverns/{tavern_id}/members/{user_id}",
+            json={"reason": reason} if reason else None,
+        )
+
+    async def ban_member(
+        self,
+        tavern_id: str,
+        user_id: str,
+        *,
+        reason: str | None = None,
+        delete_message_seconds: int | None = None,
+        auto: bool = False,
+    ) -> None:
+        """Ban a member from a tavern (requires BAN_MEMBERS)."""
+        body: dict[str, Any] = {"userId": user_id}
+        if reason:
+            body["reason"] = reason
+        if delete_message_seconds is not None:
+            body["deleteMessageSeconds"] = delete_message_seconds
+        if auto:
+            body["auto"] = True
+        await self.request("POST", f"/taverns/{tavern_id}/bans", json=body)
+
+    async def unban_member(self, tavern_id: str, user_id: str) -> None:
+        """Lift a ban (requires BAN_MEMBERS)."""
+        await self.request("DELETE", f"/taverns/{tavern_id}/bans/{user_id}")
+
+    async def mute_member(
+        self,
+        tavern_id: str,
+        user_id: str,
+        *,
+        reason: str | None = None,
+        duration_minutes: int | None = None,
+        type: str | None = None,
+        scope: str | None = None,
+        channel_ids: list[str] | None = None,
+    ) -> None:
+        """Mute/timeout a member (requires MUTE_MEMBERS). Omit duration for permanent."""
+        body: dict[str, Any] = {"userId": user_id}
+        if reason:
+            body["reason"] = reason
+        if duration_minutes is not None:
+            body["durationMinutes"] = duration_minutes
+        if type:
+            body["type"] = type
+        if scope:
+            body["scope"] = scope
+        if channel_ids:
+            body["channelIds"] = channel_ids
+        await self.request("POST", f"/taverns/{tavern_id}/mutes", json=body)
+
+    async def unmute_member(self, tavern_id: str, user_id: str) -> None:
+        """Remove an active mute (requires MUTE_MEMBERS)."""
+        await self.request("DELETE", f"/taverns/{tavern_id}/mutes/{user_id}")
 
     # ─── Search ──────────────────────────────────────────
 
