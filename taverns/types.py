@@ -194,3 +194,123 @@ class BotSelf:
             user=User.from_dict(data["user"]),
             taverns=[Tavern.from_dict(t) for t in data.get("taverns", [])],
         )
+
+
+# ─── Direct messages ─────────────────────────────────────
+
+
+@dataclass
+class DmChannel:
+    """A 1:1 direct message between the bot and one person."""
+    id: str
+    recipient: User
+    """The person on the other side."""
+    type: str = "dm"
+    created_at: str = ""
+    last_message_at: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DmChannel:
+        return cls(
+            id=data["id"],
+            recipient=User.from_dict({"id": "", **(data.get("recipient") or {})}),
+            type=data.get("type", "dm"),
+            created_at=data.get("createdAt", ""),
+            last_message_at=data.get("lastMessageAt"),
+        )
+
+
+@dataclass
+class DmAttachment:
+    """A file in a direct message."""
+    url: str
+    file_name: str
+    file_size: int
+    mime_type: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DmAttachment:
+        return cls(
+            url=data.get("url", ""),
+            file_name=data.get("fileName", ""),
+            file_size=data.get("fileSize", 0),
+            mime_type=data.get("mimeType", ""),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "url": self.url,
+            "fileName": self.file_name,
+            "fileSize": self.file_size,
+            "mimeType": self.mime_type,
+        }
+
+
+@dataclass
+class DmMessage:
+    """A message in a direct message (also the data of the ``dm_message_create``
+    and ``dm_message_update`` events)."""
+    id: str
+    channel_id: str
+    content: str
+    sender: User
+    filtered_content: str | None = None
+    status: str = "SENT"
+    reply_to_id: str | None = None
+    reply_to: dict | None = None
+    embeds: list[dict] = field(default_factory=list)
+    attachments: list[DmAttachment] = field(default_factory=list)
+    created_at: str = ""
+    edited_at: str | None = None
+    #: ``{"url", "width", "height"}`` when the person sent a GIF.
+    gif: dict | None = None
+    #: ``{"id", "name", "imageUrl"}`` when the person sent a sticker.
+    sticker: dict | None = None
+
+    @property
+    def sender_id(self) -> str:
+        return self.sender.id
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DmMessage:
+        return cls(
+            id=data.get("id", ""),
+            channel_id=data.get("channelId", ""),
+            content=data.get("content") or "",
+            sender=User.from_dict({"id": "", **(data.get("sender") or {})}),
+            filtered_content=data.get("filteredContent"),
+            status=data.get("status", "SENT"),
+            reply_to_id=data.get("replyToId"),
+            reply_to=data.get("replyTo"),
+            embeds=list(data.get("embeds") or []),
+            attachments=[DmAttachment.from_dict(a) for a in data.get("attachments") or []],
+            created_at=data.get("createdAt", ""),
+            edited_at=data.get("editedAt"),
+            gif=data.get("gif"),
+            sticker=data.get("sticker"),
+        )
+
+
+@dataclass
+class DmMessageDelete:
+    """The data of the ``dm_message_delete`` event."""
+    id: str
+    channel_id: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DmMessageDelete:
+        return cls(id=data.get("id", ""), channel_id=data.get("channelId", ""))
+
+
+@dataclass
+class DmMessagePage:
+    """One page of a direct message's history, oldest first."""
+    messages: list[DmMessage]
+    has_more: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DmMessagePage:
+        return cls(
+            messages=[DmMessage.from_dict(m) for m in data.get("messages") or []],
+            has_more=bool(data.get("hasMore", False)),
+        )

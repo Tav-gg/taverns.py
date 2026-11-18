@@ -1,9 +1,9 @@
 """Gateway intent bitfield — controls which events a bot receives.
 
 Two-layer model:
-  - Application-level: BotApplication.allowedIntents (developer configures max)
+  - Application-level: the app's allowed intents (set by the developer)
   - Session-level: declared at connect time via ?intents= query parameter
-  - Effective: session & allowed (computed server-side)
+  - Effective: session & allowed
 """
 
 from __future__ import annotations
@@ -34,10 +34,13 @@ class Intents:
     REACTIONS: int      = 1 << 13
     PINS: int           = 1 << 14
     INTERACTIONS: int   = 1 << 15
+    # Messages people send, edit and delete in their DMs with the bot. Not privileged:
+    # message content in these DMs is always included.
+    DIRECT_MESSAGES: int = 1 << 16
 
     # Shortcuts
-    DEFAULT: int = 0x7FF9   # All non-privileged (bits 0, 3-15)
-    ALL: int     = 0xFFFF   # All intents including privileged
+    DEFAULT: int = 0x17FF9  # All non-privileged (bits 0, 3-16)
+    ALL: int     = 0x1FFFF  # All intents including privileged
 
     @staticmethod
     def from_list(*intent_names: str) -> int:
@@ -64,6 +67,7 @@ class Intents:
             "REACTIONS": Intents.REACTIONS,
             "PINS": Intents.PINS,
             "INTERACTIONS": Intents.INTERACTIONS,
+            "DIRECT_MESSAGES": Intents.DIRECT_MESSAGES,
         }
         value = 0
         for name in intent_names:

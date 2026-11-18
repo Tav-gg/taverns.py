@@ -39,6 +39,10 @@ CREATE_PRIVATE_THREADS = 32
 MANAGE_THREADS = 33
 SEND_MESSAGES_IN_THREADS = 34
 MANAGE_BOTS = 35
+# Listen in voice halls: a bot in a voice hall may hear it. The bot must request
+# it and the tavern must grant it explicitly (ADMINISTRATOR does not include it);
+# members see a "listening" marker on the bot.
+LISTEN_VOICE = 45
 
 _ALL_PERMISSIONS = {
     VIEW_CHANNELS: "VIEW_CHANNELS",
@@ -77,6 +81,7 @@ _ALL_PERMISSIONS = {
     MANAGE_THREADS: "MANAGE_THREADS",
     SEND_MESSAGES_IN_THREADS: "SEND_MESSAGES_IN_THREADS",
     MANAGE_BOTS: "MANAGE_BOTS",
+    LISTEN_VOICE: "LISTEN_VOICE",
 }
 
 
@@ -96,7 +101,9 @@ class Permissions:
         self._value = int(value)
 
     def has(self, permission: int) -> bool:
-        if self._value & (1 << ADMINISTRATOR):
+        # ADMINISTRATOR grants everything except Listen in voice halls, which a
+        # tavern always grants explicitly
+        if permission != LISTEN_VOICE and self._value & (1 << ADMINISTRATOR):
             return True
         return bool(self._value & (1 << permission))
 

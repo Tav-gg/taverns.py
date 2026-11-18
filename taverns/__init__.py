@@ -23,6 +23,7 @@ from .commands import command, option
 from .embed import Embed, EmbedBuilder, EmbedField, EmbedFooter, EmbedImage
 from .errors import (
     AuthenticationError,
+    DMErrorCode,
     GatewayError,
     HTTPError,
     InteractionError,
@@ -33,12 +34,18 @@ from .intents import Intents
 from .interaction import Interaction
 from .permissions import Permissions
 from .rest import RESTClient
+from .voice import VoiceAudioFrame, VoiceConnection, VoiceManager, VoiceSpeakingEvent
 from .types import (
     BotCommand,
     BotSelf,
     Channel,
     CommandOption,
     CommandOptionType,
+    DmAttachment,
+    DmChannel,
+    DmMessage,
+    DmMessageDelete,
+    DmMessagePage,
     Member,
     Message,
     Tavern,
@@ -46,7 +53,7 @@ from .types import (
 )
 from .webhook import verify_webhook_signature
 
-__version__ = "0.2.4"
+__version__ = "0.3.0"
 
 __all__ = [
     # Core
@@ -64,6 +71,12 @@ __all__ = [
     "BotSelf",
     "CommandOption",
     "CommandOptionType",
+    # Direct messages
+    "DmChannel",
+    "DmMessage",
+    "DmMessageDelete",
+    "DmMessagePage",
+    "DmAttachment",
     # Embeds
     "Embed",
     "EmbedBuilder",
@@ -72,6 +85,11 @@ __all__ = [
     "EmbedImage",
     # Interactions
     "Interaction",
+    # Voice
+    "VoiceManager",
+    "VoiceConnection",
+    "VoiceAudioFrame",
+    "VoiceSpeakingEvent",
     # Commands
     "command",
     "option",
@@ -84,4 +102,5 @@ __all__ = [
     "RateLimitError",
     "GatewayError",
     "InteractionError",
+    "DMErrorCode",
 ]

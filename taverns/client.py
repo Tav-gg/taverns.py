@@ -24,15 +24,34 @@ import asyncio
 import logging
 from typing import Any, Callable, Coroutine
 
+from ._url import check_base_url
 from .embed import Embed
+from .errors import DMErrorCode, HTTPError
 from .gateway import Gateway
 from .interaction import Interaction
 from .rest import RESTClient
-from .types import BotCommand, BotSelf, Channel, Member, Message, Tavern, User
+from .types import (
+    BotCommand,
+    BotSelf,
+    Channel,
+    DmAttachment,
+    DmChannel,
+    DmMessage,
+    DmMessageDelete,
+    DmMessagePage,
+    Member,
+    Message,
+    Tavern,
+    User,
+)
+from .voice import VoiceManager
 
 logger = logging.getLogger("taverns")
 
 EventCallback = Callable[..., Coroutine[Any, Any, None]]
+
+# How many person-to-DM-channel IDs the client remembers for send_dm()
+DM_CHANNEL_CACHE_SIZE = 10_000
 
 
 class Client:
@@ -40,8 +59,11 @@ class Client:
 
     Args:
         intents: Gateway intents bitfield (session-level). Use :class:`Intents` constants.
-        api_url: Override the REST API base URL.
-        ws_url: Override the WebSocket gateway URL.
+        api_url: Override the REST API base URL (must be ``https://``).
+        ws_url: Override the WebSocket gateway URL (must be ``wss://``).
+        ffmpeg_path: ffmpeg binary for ``client.voice`` playback (default: ``FFMPEG_PATH`` or PATH).
+        allow_insecure: Accept plain ``http://`` and ``ws://`` URLs. The bot token is then
+            sent unencrypted, so use this for local development only.
     """
 
     def __init__(
@@ -50,10 +72,15 @@ class Client:
         intents: int | None = None,
         api_url: str = "https://api.tav.gg/api/v1",
         ws_url: str = "wss://ws.tav.gg",
+        ffmpeg_path: str | None = None,
+        allow_insecure: bool = False,
     ):
+        check_base_url(api_url, "api", allow_insecure=allow_insecure)
+        check_base_url(ws_url, "gateway", allow_insecure=allow_insecure)
         self._intents = intents
         self._api_url = api_url
         self._ws_url = ws_url
+        self._allow_insecure = allow_insecure
         self._token: str | None = None
         self._rest: RESTClient | None = None
         self._gateway: Gateway | None = None
@@ -61,6 +88,12 @@ class Client:
         self._event_handlers: dict[str, list[EventCallback]] = {}
         self._taverns: dict[str, Tavern] = {}
         self._channels: dict[str, Channel] = {}
+        # The bot's direct message channel with each person: user_id -> channel_id
+        self._dm_channels: dict[str, str] = {}
+        # create_dm() calls in flight, so two sends to one person open one DM
+        self._dm_opens: dict[str, asyncio.Future[DmChannel]] = {}
+        self.voice = VoiceManager(self, ffmpeg_path=ffmpeg_path)
+        """Voice halls: ``await client.voice.join(channel_id)`` (needs ``taverns.py[voice]``)."""
 
     @property
     def user(self) -> User:
@@ -197,6 +230,117 @@ class Client:
         """
         return await self.rest.register_commands(commands)
 
+    # ─── Direct messages ─────────────────────────────────
+    # The bot may message a person who is in a tavern where the bot is installed
+    # and turned on, and who allows it (or wrote to the bot in the last 24 hours).
+    # Anything else raises HTTPError with code "CANNOT_DM_USER". Hitting a DM limit
+    # raises RateLimitError (scope, retry_after); the SDK does not resend those.
+
+    async def create_dm(self, user_id: str) -> DmChannel:
+        """Open the bot's direct message with a person (or get the existing one).
+
+        The channel ID is remembered, so :meth:`send_dm` to the same person does
+        not open it again.
+        """
+        pending = self._dm_opens.get(user_id)
+        if pending is None:
+            pending = asyncio.ensure_future(self.rest.create_dm(user_id))
+            self._dm_opens[user_id] = pending
+            pending.add_done_callback(lambda done: self._forget_dm_open(user_id, done))
+        # shield: one caller giving up does not cancel the open for the others
+        channel = await asyncio.shield(pending)
+        self._remember_dm_channel(user_id, channel.id)
+        return channel
+
+    async def send_dm(
+        self,
+        user_id: str,
+        content: str | None = None,
+        *,
+        embeds: list[Embed] | None = None,
+        reply_to_id: str | None = None,
+        nonce: str | None = None,
+        attachments: list[DmAttachment | dict[str, Any]] | None = None,
+    ) -> DmMessage:
+        """Send a direct message to a person. Opens the DM the first time, then
+        reuses the channel.
+
+        Example::
+
+            await client.send_dm(user_id, "Your order is ready!")
+            await client.send_dm(user_id, "Your stats:", embeds=[embed])
+        """
+        options: dict[str, Any] = {
+            "embeds": embeds, "reply_to_id": reply_to_id, "nonce": nonce, "attachments": attachments,
+        }
+        known = self._dm_channels.get(user_id)
+        if known:
+            try:
+                return await self.rest.send_dm_message(known, content, **options)
+            except HTTPError as e:
+                # The remembered channel is gone: open the DM again, once
+                if e.code != DMErrorCode.DM_CHANNEL_NOT_FOUND:
+                    raise
+                self._dm_channels.pop(user_id, None)
+        channel = await self.create_dm(user_id)
+        return await self.rest.send_dm_message(channel.id, content, **options)
+
+    async def send_dm_message(
+        self,
+        channel_id: str,
+        content: str | None = None,
+        *,
+        embeds: list[Embed] | None = None,
+        reply_to_id: str | None = None,
+        nonce: str | None = None,
+        attachments: list[DmAttachment | dict[str, Any]] | None = None,
+    ) -> DmMessage:
+        """Send a message in a direct message the bot already has open."""
+        return await self.rest.send_dm_message(
+            channel_id, content,
+            embeds=embeds, reply_to_id=reply_to_id, nonce=nonce, attachments=attachments,
+        )
+
+    async def get_dm_channel(self, channel_id: str) -> DmChannel:
+        """Get one of the bot's direct messages."""
+        channel = await self.rest.get_dm_channel(channel_id)
+        if channel.recipient.id:
+            self._remember_dm_channel(channel.recipient.id, channel.id)
+        return channel
+
+    async def get_dm_messages(
+        self, channel_id: str, *, before: str | None = None, limit: int | None = None,
+    ) -> DmMessagePage:
+        """Get messages from a direct message, oldest first."""
+        return await self.rest.get_dm_messages(channel_id, before=before, limit=limit)
+
+    async def edit_dm_message(
+        self,
+        channel_id: str,
+        message_id: str,
+        content: str | None = None,
+        *,
+        embeds: list[Embed] | None = None,
+    ) -> DmMessage:
+        """Edit one of the bot's own messages in a direct message."""
+        return await self.rest.edit_dm_message(channel_id, message_id, content, embeds=embeds)
+
+    async def delete_dm_message(self, channel_id: str, message_id: str) -> None:
+        """Delete one of the bot's own messages in a direct message."""
+        await self.rest.delete_dm_message(channel_id, message_id)
+
+    def _remember_dm_channel(self, user_id: str, channel_id: str) -> None:
+        self._dm_channels.pop(user_id, None)  # re-insert as the newest entry
+        self._dm_channels[user_id] = channel_id
+        if len(self._dm_channels) > DM_CHANNEL_CACHE_SIZE:
+            self._dm_channels.pop(next(iter(self._dm_channels)), None)
+
+    def _forget_dm_open(self, user_id: str, done: asyncio.Future[DmChannel]) -> None:
+        if self._dm_opens.get(user_id) is done:
+            del self._dm_opens[user_id]
+        if not done.cancelled():
+            done.exception()  # the callers see the error; never "exception was never retrieved"
+
     # ─── Lifecycle ───────────────────────────────────────
 
     async def login(self, token: str) -> None:
@@ -206,7 +350,7 @@ class Client:
             token: Bot token (starts with ``tavbot_``).
         """
         self._token = token
-        self._rest = RESTClient(token, api_url=self._api_url)
+        self._rest = RESTClient(token, api_url=self._api_url, allow_insecure=self._allow_insecure)
 
         # Fetch bot identity
         self._bot_self = await self._rest.get_self()
@@ -235,11 +379,16 @@ class Client:
             intents=self._intents,
             ws_url=self._ws_url,
             on_event=self._handle_event,
+            allow_insecure=self._allow_insecure,
         )
         await self._gateway.connect()
 
     async def close(self) -> None:
         """Disconnect and clean up."""
+        try:
+            await self.voice.close()
+        except Exception as e:
+            logger.debug("Leaving voice halls failed: %s", e)
         if self._gateway:
             await self._gateway.disconnect()
         if self._rest:
@@ -270,20 +419,27 @@ class Client:
 
     async def _handle_event(self, event_name: str, data: dict[str, Any]) -> None:
         """Route gateway events to registered handlers."""
+        # The bot's own voice connections
+        self.voice._handle_gateway_event(event_name, data)
+
         # Convert data to typed objects where applicable
         if event_name == "message_create":
-            obj = Message.from_dict(data)
-            await self._dispatch(event_name, obj)
+            await self._dispatch(event_name, Message.from_dict(data))
         elif event_name == "interaction_create":
-            obj = Interaction.from_dict(data, rest=self._rest)
-            await self._dispatch(event_name, obj)
+            await self._dispatch(event_name, Interaction.from_dict(data, rest=self._rest))
+        elif event_name in ("dm_message_create", "dm_message_update"):
+            dm = DmMessage.from_dict(data)
+            if event_name == "dm_message_create" and dm.sender.id and dm.channel_id and not dm.sender.is_bot:
+                self._remember_dm_channel(dm.sender.id, dm.channel_id)
+            await self._dispatch(event_name, dm)
+        elif event_name == "dm_message_delete":
+            await self._dispatch(event_name, DmMessageDelete.from_dict(data))
         elif event_name in ("member_join", "member_leave"):
-            obj = Member.from_dict(data)
-            await self._dispatch(event_name, obj)
+            await self._dispatch(event_name, Member.from_dict(data))
         elif event_name in ("channel_create", "channel_update"):
-            obj = Channel.from_dict(data)
-            self._channels[obj.id] = obj
-            await self._dispatch(event_name, obj)
+            channel = Channel.from_dict(data)
+            self._channels[channel.id] = channel
+            await self._dispatch(event_name, channel)
         elif event_name == "channel_delete":
             ch_id = data.get("id", "")
             self._channels.pop(ch_id, None)
