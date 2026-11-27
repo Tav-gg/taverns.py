@@ -4,7 +4,7 @@ All notable changes to taverns.py are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (while the version is 0.x, a minor release can break things).
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-11-27
 
 This release matches the Taverns API as it works now: message content as on Discord, bots that manage
 roles, and the gateway's ping and reconnect rules.
