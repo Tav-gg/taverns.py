@@ -62,6 +62,9 @@ def test_crafted_id_cannot_change_the_route(serve):
         ("unmute_member", ("t", evil), {}), ("search_messages", (evil,), {"query": "q"}),
         ("search_messages", ("t",), {"query": "q", "channel_id": evil}),
         ("get_roles", (evil,), {}), ("join_voice", ("t", evil), {}), ("leave_voice", (evil,), {}),
+        ("create_role", (evil,), {"name": "x"}), ("edit_role", ("t", evil), {"name": "x"}),
+        ("delete_role", ("t", evil), {}), ("reorder_roles", (evil, {"r": 1}), {}),
+        ("add_member_role", ("t", evil, "r"), {}), ("remove_member_role", ("t", "u", evil), {}),
     ]
 
     async def run():

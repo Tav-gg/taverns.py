@@ -55,7 +55,8 @@ class Interaction:
         """Send an immediate reply to this interaction.
 
         Args:
-            content: The response text (max 4000 chars).
+            content: The response text (max 4000 chars). May be left out when
+                ``embeds`` are given.
             ephemeral: If True, only the invoking user sees this response.
             embeds: Optional list of rich embeds to attach.
         """

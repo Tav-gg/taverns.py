@@ -38,6 +38,10 @@ async def on_message_create(message):
 client.run(os.environ["BOT_TOKEN"])
 ```
 
+Reading what people write needs the `MESSAGE_CONTENT` intent: turn it on in the Intents tab of your bot's
+page in the [Developer Portal](https://tav.gg/developers/home). Without it, `message.content` is empty (see
+[Intents](#intents)).
+
 ## Slash Commands
 
 ```python
@@ -84,6 +88,8 @@ async def on_interaction_create(interaction: Interaction):
 await interaction.reply("Only you can see this", ephemeral=True)
 ```
 
+A response needs text, embeds, or both: `await interaction.reply(embeds=[embed])` sends just the embed.
+
 ## Webhook Verification
 
 ```python
@@ -114,14 +120,28 @@ from taverns import Intents
 # Specific intents
 client = Client(intents=Intents.MESSAGES | Intents.INTERACTIONS)
 
-# All non-privileged intents
+# The platform's default: every non-privileged intent except INTERACTIONS
 client = Client(intents=Intents.DEFAULT)
 
 # All intents (including privileged)
 client = Client(intents=Intents.ALL)
 ```
 
-Privileged intents (`MESSAGE_CONTENT`, `MEMBERS`) are self-serve for private bots.
+Two intents are privileged: `MESSAGE_CONTENT` (what people write) and `MEMBERS` (members joining, leaving and
+changing). Turn them on in the Intents tab of your bot's page in the
+[Developer Portal](https://tav.gg/developers/home). A public bot in more than 100 taverns needs a review before
+they apply.
+
+Message content works as on Discord. Without `MESSAGE_CONTENT`, a message's `content` is empty, and so are its
+embeds, attachments, link cards and poll, both in gateway events and in REST answers (`get_messages`,
+`search_messages`, pins). The exceptions:
+
+- messages the bot sent itself,
+- messages that mention the bot (`<@bot_user_id>`; a role mention, `@everyone`, `@here` or a reply does not count),
+- messages in the bot's DMs.
+
+REST answers follow the intents turned on for the bot in the Developer Portal; gateway events also follow the
+intents the bot connected with.
 
 ## Direct Messages
 
@@ -216,6 +236,31 @@ def on_speaking(event):
 If your bot records, transcribes or otherwise processes what people say, say so in your bot's description and
 privacy policy, and make sure the people in the hall know.
 
+## Members and Roles
+
+```python
+member = await client.get_member(tavern_id, user_id)         # a person or a bot, by user ID
+print(member.display_name, member.roles, member.is_online)
+
+await client.kick_member(tavern_id, user_id, reason="spam")  # the reason goes in the audit log
+
+role = await client.rest.create_role(tavern_id, name="Crew", color="#FF5733")
+await client.rest.add_member_role(tavern_id, user_id, role["id"])
+await client.rest.remove_member_role(tavern_id, user_id, role["id"])
+
+@client.event
+async def on_member_join(member):                            # needs the MEMBERS intent
+    print(member.display_name, "joined")
+```
+
+Kicking, banning and muting need `KICK_MEMBERS`, `BAN_MEMBERS` and `MUTE_MEMBERS`; changing roles needs
+`MANAGE_ROLES`. As on Discord, a bot acts only on members and roles below its own highest role, and gives a role
+only permissions the bot has itself. A newly installed bot's role starts at the bottom of the list: ask the
+tavern owner to move it above the roles it should manage.
+
+Also on `client.rest`: `get_members(tavern_id, query=)`, `edit_role`, `delete_role`, `reorder_roles` and
+`get_roles`.
+
 ## REST Client
 
 For direct API access:
@@ -224,7 +269,15 @@ For direct API access:
 # Available after login
 channels = await client.rest.get_channels(tavern_id)
 members = await client.rest.get_members(tavern_id)
-messages = await client.rest.get_messages(tavern_id, channel_id, limit=50)
+
+page = await client.rest.get_messages(tavern_id, channel_id, limit=50)  # oldest first
+for message in page.messages:
+    print(message.sender_id, message.content)
+if page.has_more:
+    older = await client.rest.get_messages(tavern_id, channel_id, before=page.messages[0].id)
+
+found = await client.rest.search_messages(tavern_id, query="dragon", from_user_id=user_id)
+more = await client.rest.search_messages(tavern_id, query="dragon", offset=found[-1].id)  # next page
 ```
 
 IDs passed to the REST helpers are escaped, so an ID taken from user input (a command option, message text)
@@ -242,8 +295,12 @@ with `scope` and `retry_after`.
 
 - The bot token is sent only over `https://` and `wss://`. For a local test server, pass
   `allow_insecure=True` to `Client` to accept `http://` and `ws://` URLs.
-- If the gateway refuses the token (revoked, regenerated, or the bot was disabled), the client stops
-  reconnecting and raises `AuthenticationError`.
+- Every 30 seconds the client sends a heartbeat (it keeps the bot shown online) and a `ping`, which the gateway
+  answers with `pong`. When nothing comes back for 75 seconds, the client opens a new connection.
+- The client reconnects after every close: at once when the gateway asks for it (the connection's age limit, about
+  2 hours, or a server restart), otherwise after a growing delay of up to 30 seconds.
+- If the gateway refuses the token when connecting (revoked, regenerated, or the bot was disabled), the client
+  stops reconnecting and raises `AuthenticationError`.
 - The SDK logs under `taverns.*`. At DEBUG level, `taverns.gateway` logs every gateway frame (message
   content and user data) and `taverns.gateway.ws` logs the WebSocket handshake. The token is replaced with
   `<redacted>` in both, but keep DEBUG logs out of shared places.

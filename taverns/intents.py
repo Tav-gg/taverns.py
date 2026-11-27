@@ -4,6 +4,11 @@ Two-layer model:
   - Application-level: the app's allowed intents (set by the developer)
   - Session-level: declared at connect time via ?intents= query parameter
   - Effective: session & allowed
+
+The two privileged intents, MESSAGE_CONTENT and MEMBERS, are turned on in the
+Intents tab of the bot's page in the developer portal. Without MESSAGE_CONTENT,
+a message's content (and its embeds and attachments) is empty, unless the bot
+sent it, it mentions the bot, or it is in one of the bot's DMs.
 """
 
 from __future__ import annotations
@@ -19,8 +24,8 @@ class Intents:
     """
 
     MESSAGES: int       = 1 << 0
-    MESSAGE_CONTENT: int = 1 << 1   # Privileged
-    MEMBERS: int        = 1 << 2   # Privileged
+    MESSAGE_CONTENT: int = 1 << 1   # Privileged: the content of other people's messages
+    MEMBERS: int        = 1 << 2   # Privileged: member join, leave and update events
     MODERATION: int     = 1 << 3
     CHANNELS: int       = 1 << 4
     THREADS: int        = 1 << 5
@@ -39,8 +44,11 @@ class Intents:
     DIRECT_MESSAGES: int = 1 << 16
 
     # Shortcuts
-    DEFAULT: int = 0x17FF9  # All non-privileged (bits 0, 3-16)
-    ALL: int     = 0x1FFFF  # All intents including privileged
+    # The platform's default for new bots: bits 0, 3-14 and 16, so every non-privileged
+    # intent except INTERACTIONS (slash commands still reach the bot: they are sent to it
+    # directly). Add INTERACTIONS for the interaction_response events.
+    DEFAULT: int = 0x17FF9
+    ALL: int     = 0x1FFFF  # All intents including privileged (bits 0-16)
 
     @staticmethod
     def from_list(*intent_names: str) -> int:

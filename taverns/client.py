@@ -21,6 +21,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from typing import Any, Callable, Coroutine
 
@@ -52,6 +53,16 @@ EventCallback = Callable[..., Coroutine[Any, Any, None]]
 
 # How many person-to-DM-channel IDs the client remembers for send_dm()
 DM_CHANNEL_CACHE_SIZE = 10_000
+
+
+def _joined_member(data: dict[str, Any]) -> Member:
+    """The member of a ``member_join`` event. A person's join carries their
+    member row in ``member`` (as ``get_member`` returns it); a bot's join
+    carries the bot in ``user``."""
+    row = data.get("member")
+    if isinstance(row, dict):
+        return Member.from_dict(row, tavern_id=data.get("tavernId", ""))
+    return Member.from_dict(data)
 
 
 class Client:
@@ -434,20 +445,36 @@ class Client:
             await self._dispatch(event_name, dm)
         elif event_name == "dm_message_delete":
             await self._dispatch(event_name, DmMessageDelete.from_dict(data))
-        elif event_name in ("member_join", "member_leave"):
+        elif event_name == "member_join":
+            await self._dispatch(event_name, _joined_member(data))
+        elif event_name == "member_leave":
             await self._dispatch(event_name, Member.from_dict(data))
         elif event_name in ("channel_create", "channel_update"):
-            channel = Channel.from_dict(data)
-            self._channels[channel.id] = channel
+            channel = self._update_channel(data)
             await self._dispatch(event_name, channel)
         elif event_name == "channel_delete":
-            ch_id = data.get("id", "")
+            ch_id = data.get("channelId") or data.get("id") or ""
             self._channels.pop(ch_id, None)
             await self._dispatch(event_name, data)
         elif event_name == "bot_installed":
-            tavern = Tavern.from_dict(data) if "name" in data else None
-            if tavern:
-                self._taverns[tavern.id] = tavern
+            # {"tavernId", "tavernName", "grantedPermissions"}
+            t_id = data.get("tavernId", "")
+            if t_id:
+                known = self._taverns.get(t_id)
+                self._taverns[t_id] = Tavern(
+                    id=t_id,
+                    name=data.get("tavernName") or (known.name if known else ""),
+                    slug=known.slug if known else "",
+                    icon_url=known.icon_url if known else None,
+                    member_count=known.member_count if known else 0,
+                    granted_permissions=data.get("grantedPermissions", "0"),
+                )
+            await self._dispatch(event_name, data)
+        elif event_name == "bot_permissions_updated":
+            # {"tavernId", "grantedPermissions"}
+            tavern = self._taverns.get(data.get("tavernId", ""))
+            if tavern is not None:
+                tavern.granted_permissions = data.get("grantedPermissions", tavern.granted_permissions)
             await self._dispatch(event_name, data)
         elif event_name == "bot_removed":
             t_id = data.get("tavernId", "")
@@ -455,6 +482,25 @@ class Client:
             await self._dispatch(event_name, data)
         else:
             await self._dispatch(event_name, data)
+
+    def _update_channel(self, data: dict[str, Any]) -> Channel:
+        """Cache a created or updated hall. An update may carry only the fields
+        that changed (such as ``isPrivate``); the rest stay as cached."""
+        known = self._channels.get(data.get("id", ""))
+        if known is not None:
+            changed = {
+                attr: data[key]
+                for key, attr in (
+                    ("name", "name"), ("type", "type"), ("position", "position"),
+                    ("topic", "topic"), ("categoryId", "category_id"), ("tavernId", "tavern_id"),
+                )
+                if key in data and (data[key] is not None or key in ("topic", "categoryId"))
+            }
+            channel = dataclasses.replace(known, **changed)
+        else:
+            channel = Channel.from_dict(data)
+        self._channels[channel.id] = channel
+        return channel
 
     async def _dispatch(self, event_name: str, *args: Any) -> None:
         """Call all registered handlers for an event."""

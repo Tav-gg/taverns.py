@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import sys
+import time
 
 import pytest
 from aiohttp import WSMsgType, web
@@ -90,8 +91,26 @@ def test_refused_handshake_raises_without_reconnecting(serve, status):
     assert attempts == 1
 
 
-@pytest.mark.parametrize("code", [4001, 4003, 4004])
-def test_auth_close_codes_raise_without_reconnecting(serve, code):
+@pytest.fixture
+def instant_reconnect(monkeypatch: pytest.MonkeyPatch) -> list[int | None]:
+    """Reconnects happen at once; the list records the close code before each one."""
+    codes: list[int | None] = []
+    real = Gateway._reconnect_delay
+
+    def record(self: Gateway) -> float:
+        codes.append(self._close_code)
+        real(self)
+        return 0.0
+
+    monkeypatch.setattr(Gateway, "_reconnect_delay", record)
+    return codes
+
+
+# The gateway closes with these (age limit, no answer to pings, too many frames
+# or a ban, a frame too large, a restart). None of them means a refused token:
+# the token is refused only when connecting, with HTTP 401 or 403.
+@pytest.mark.parametrize("code", [1000, 1001, 1008, 1009, 1012, 4001])
+def test_every_close_reconnects_and_a_refused_token_on_reconnect_stops(serve, instant_reconnect, code):
     attempts = 0
 
     async def run():
@@ -100,20 +119,91 @@ def test_auth_close_codes_raise_without_reconnecting(serve, code):
         async def handler(request: web.BaseRequest) -> web.StreamResponse:
             nonlocal attempts
             attempts += 1
+            if attempts > 1:
+                return web.Response(status=401, text="Unauthorized")
             ws = web.WebSocketResponse()
             await ws.prepare(request)
-            await ws.close(code=code, message=b"Unauthorized")
+            await ws.close(code=code, message=b"bye")
             return ws
 
         async with serve(handler) as port:
-            with pytest.raises(AuthenticationError, match=str(code)):
+            with pytest.raises(AuthenticationError, match="HTTP 401"):
                 await asyncio.wait_for(local_gateway(port).connect(), timeout=10)
 
     asyncio.run(run())
-    assert attempts == 1
+    assert attempts == 2
+    assert instant_reconnect == [code]
 
 
-def test_ordinary_close_reconnects_then_stops_on_auth_failure(serve):
+def test_reconnect_delay_follows_the_close_code(monkeypatch: pytest.MonkeyPatch):
+    from taverns import gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module.random, "uniform", lambda a, b: b)  # the longest jitter
+    gateway = Gateway(TOKEN)
+
+    def after(code: int | None, lasted: float | None) -> float:
+        gateway._close_code = code
+        gateway._opened_at = None if lasted is None else time.monotonic() - lasted
+        return gateway._reconnect_delay()
+
+    # The age limit (1000) and a restart (1012): back at once, the backoff does not grow
+    assert after(1000, 5) <= 1
+    assert after(1012, 5) <= 1
+    assert after(1012, 5) <= 1
+    # Any other close, or a connection that never opened: 1, 2, 4, 8 seconds (+ jitter), at most 30
+    gateway._reconnect_attempt = 0
+    assert [after(1008, 1), after(1001, 1), after(None, None), after(1006, 1)] == [2, 3, 5, 9]
+    for _ in range(5):
+        after(None, None)
+    assert after(None, None) == gateway_module.MAX_RECONNECT_DELAY
+    # A connection that stayed up a while starts the backoff over
+    assert after(1001, gateway_module.STABLE_CONNECTION) == 2
+
+
+# ─── Heartbeat and ping ──────────────────────────────────
+
+
+def test_heartbeat_and_ping_are_sent_and_pong_is_not_an_event(serve, monkeypatch: pytest.MonkeyPatch):
+    from taverns import gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "HEARTBEAT_INTERVAL", 0.05)
+    received: list[dict] = []
+    events: list[str] = []
+
+    async def run():
+        async def handler(request: web.BaseRequest) -> web.StreamResponse:
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            async for msg in ws:
+                frame = json.loads(msg.data)
+                received.append(frame)
+                if frame["action"] == "ping":
+                    await ws.send_str(json.dumps({"event": "pong", "data": {"t": 1}}))
+                    if len(received) == 2:
+                        await ws.send_str(json.dumps({"event": "tavern_message", "data": {"id": "m1"}}))
+            return ws
+
+        async with serve(handler) as port:
+            gateway = None
+
+            async def on_event(name: str, data: dict) -> None:
+                events.append(name)
+                assert gateway is not None
+                await gateway.disconnect()
+
+            gateway = local_gateway(port, on_event=on_event)
+            await asyncio.wait_for(gateway.connect(), timeout=10)
+
+    asyncio.run(run())
+    assert received[:2] == [{"action": "heartbeat", "data": {}}, {"action": "ping"}]
+    assert events == ["message_create"]
+
+
+def test_a_silent_gateway_is_dropped_and_connected_again(serve, monkeypatch: pytest.MonkeyPatch, instant_reconnect):
+    from taverns import gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr(gateway_module, "PONG_TIMEOUT", 0.2)
     attempts = 0
 
     async def run():
@@ -122,17 +212,58 @@ def test_ordinary_close_reconnects_then_stops_on_auth_failure(serve):
         async def handler(request: web.BaseRequest) -> web.StreamResponse:
             nonlocal attempts
             attempts += 1
+            if attempts > 1:
+                return web.Response(status=403)
             ws = web.WebSocketResponse()
             await ws.prepare(request)
-            await ws.close(code=1001 if attempts == 1 else 4001, message=b"bye")
+            async for _ in ws:
+                pass  # reads every ping, never answers
             return ws
 
         async with serve(handler) as port:
-            with pytest.raises(AuthenticationError):
-                await asyncio.wait_for(local_gateway(port).connect(), timeout=15)
+            with pytest.raises(AuthenticationError, match="HTTP 403"):
+                await asyncio.wait_for(local_gateway(port).connect(), timeout=10)
 
     asyncio.run(run())
     assert attempts == 2
+    assert len(instant_reconnect) == 1
+
+
+def test_an_event_that_fails_to_handle_does_not_drop_the_connection(serve):
+    events: list[str] = []
+    connections = 0
+
+    async def run():
+        nonlocal connections
+
+        async def handler(request: web.BaseRequest) -> web.StreamResponse:
+            nonlocal connections
+            connections += 1
+            ws = web.WebSocketResponse()
+            await ws.prepare(request)
+            await ws.send_str("not json")
+            await ws.send_str(json.dumps({"event": "tavern_channel_updated", "data": {"id": "c1"}}))
+            await ws.send_str(json.dumps({"event": "tavern_message", "data": None}))
+            await ws.receive()  # wait for the client to close
+            return ws
+
+        async with serve(handler) as port:
+            gateway = None
+
+            async def on_event(name: str, data: dict) -> None:
+                events.append(name)
+                if name == "channel_update":
+                    raise KeyError("name")
+                assert data == {}
+                assert gateway is not None
+                await gateway.disconnect()
+
+            gateway = local_gateway(port, on_event=on_event)
+            await asyncio.wait_for(gateway.connect(), timeout=10)
+
+    asyncio.run(run())
+    assert events == ["channel_update", "message_create"]
+    assert connections == 1
 
 
 # ─── websockets 14+ connection state ─────────────────────

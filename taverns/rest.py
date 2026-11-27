@@ -15,6 +15,7 @@ from ._url import check_base_url
 from ._url import path_segment as _seg
 from .embed import Embed
 from .errors import AuthenticationError, DMErrorCode, HTTPError, RateLimitError
+from .permissions import Permissions
 from .types import (
     BotCommand,
     BotSelf,
@@ -25,6 +26,7 @@ from .types import (
     DmMessagePage,
     Member,
     Message,
+    MessagePage,
     Tavern,
 )
 
@@ -85,6 +87,17 @@ def _parse_retry_after(value: str | None) -> float:
     if not math.isfinite(seconds) or seconds < 0:
         return 1.0
     return min(seconds, MAX_RATE_LIMIT_WAIT)
+
+
+def _interaction_body(content: str, ephemeral: bool, embeds: list[Embed] | None) -> dict[str, Any]:
+    """An interaction response: the text, the embeds, or both. Empty text is left
+    out when there are embeds."""
+    body: dict[str, Any] = {"ephemeral": ephemeral}
+    if content or not embeds:
+        body["content"] = content
+    if embeds:
+        body["embeds"] = [e.to_dict() for e in embeds]
+    return body
 
 
 def _rate_limit_error(raw: bytes, retry_after_header: str | None) -> RateLimitError:
@@ -151,7 +164,7 @@ class RESTClient:
                 headers={
                     "Authorization": f"Bot {self._token}",
                     "Content-Type": "application/json",
-                    "User-Agent": "taverns.py/0.3.0",
+                    "User-Agent": "taverns.py/0.4.0",
                 },
                 timeout=aiohttp.ClientTimeout(total=30),
             )
@@ -289,12 +302,30 @@ class RESTClient:
         return await self.request("POST", f"/bots/@me/taverns/{_seg(tavern_id)}/voice/leave")
 
     async def get_channels(self, tavern_id: str) -> list[Channel]:
+        """The tavern's halls the bot can see."""
         data = await self.request("GET", f"/taverns/{_seg(tavern_id)}/channels")
-        return [Channel.from_dict(c) for c in data]
+        # The answer is {"channels": [...], "categories": [...]}
+        rows = data.get("channels") if isinstance(data, dict) else data
+        return [Channel.from_dict({"tavernId": tavern_id, **c}) for c in rows or []]
 
-    async def get_members(self, tavern_id: str) -> list[Member]:
-        data = await self.request("GET", f"/taverns/{_seg(tavern_id)}/members")
-        return [Member.from_dict(m) for m in data]
+    async def get_members(
+        self, tavern_id: str, *, query: str | None = None, limit: int | None = None,
+    ) -> list[Member]:
+        """The tavern's members.
+
+        With ``query``, only members whose name or nickname contains it, up to
+        ``limit`` (1 to 50, default 20). Search results carry the name, avatar
+        and nickname, but no roles or online state.
+        """
+        params: dict[str, str] | None = None
+        if query is not None and query.strip():
+            params = {"q": query}
+            if limit is not None:
+                params["limit"] = str(limit)
+        data = await self.request("GET", f"/taverns/{_seg(tavern_id)}/members", params=params)
+        # A search answers {"members": [...], "count": n}
+        rows = data.get("members") if isinstance(data, dict) else data
+        return [Member.from_dict(m, tavern_id=tavern_id) for m in rows or []]
 
     async def send_message(
         self,
@@ -313,7 +344,7 @@ class RESTClient:
         data = await self.request(
             "POST", f"/taverns/{_seg(tavern_id)}/channels/{_seg(channel_id)}/messages", json=body,
         )
-        return Message.from_dict(data)
+        return Message.from_dict(data, tavern_id=tavern_id)
 
     async def edit_message(
         self,
@@ -321,26 +352,36 @@ class RESTClient:
         message_id: str,
         *,
         content: str,
-        embeds: list[Embed] | None = None,
-    ) -> None:
-        body: dict[str, Any] = {"content": content}
-        if embeds:
-            body["embeds"] = [e.to_dict() for e in embeds]
-        await self.request(
-            "PATCH", f"/taverns/{_seg(tavern_id)}/messages/{_seg(message_id)}", json=body,
+    ) -> Message:
+        """Edit the text of one of the bot's messages (1 to 2000 characters).
+
+        Only the text can be changed; embeds stay as they were sent.
+        """
+        data = await self.request(
+            "PATCH", f"/taverns/{_seg(tavern_id)}/messages/{_seg(message_id)}",
+            json={"content": content},
         )
+        return Message.from_dict(data or {}, tavern_id=tavern_id)
 
     async def delete_message(self, tavern_id: str, message_id: str) -> None:
         await self.request("DELETE", f"/taverns/{_seg(tavern_id)}/messages/{_seg(message_id)}")
 
     async def get_messages(
-        self, tavern_id: str, channel_id: str, *, limit: int = 50,
-    ) -> list[Message]:
+        self, tavern_id: str, channel_id: str, *, limit: int = 50, before: str | None = None,
+    ) -> MessagePage:
+        """Get a hall's newest messages, oldest first (``limit`` 1 to 100, default 50).
+
+        For older messages, pass ``before=page.messages[0].id`` while
+        ``page.has_more`` is true.
+        """
+        params: dict[str, str] = {"limit": str(limit)}
+        if before:
+            params["before"] = before
         data = await self.request(
             "GET", f"/taverns/{_seg(tavern_id)}/channels/{_seg(channel_id)}/messages",
-            params={"limit": str(limit)},
+            params=params,
         )
-        return [Message.from_dict(m) for m in data]
+        return MessagePage.from_dict(data or {}, tavern_id=tavern_id)
 
     # ─── Slash Commands ──────────────────────────────────
 
@@ -358,20 +399,19 @@ class RESTClient:
         await self.request("DELETE", f"/bots/@me/commands/{_seg(command_id)}")
 
     # ─── Interactions ────────────────────────────────────
+    # A response needs text (up to 4000 characters) or at least one embed.
 
     async def reply_to_interaction(
         self,
         interaction_id: str,
         *,
-        content: str,
+        content: str = "",
         ephemeral: bool = False,
         embeds: list[Embed] | None = None,
     ) -> None:
-        body: dict[str, Any] = {"content": content, "ephemeral": ephemeral}
-        if embeds:
-            body["embeds"] = [e.to_dict() for e in embeds]
         await self.request(
-            "POST", f"/interactions/{_seg(interaction_id)}/callback", json=body,
+            "POST", f"/interactions/{_seg(interaction_id)}/callback",
+            json=_interaction_body(content, ephemeral, embeds),
         )
 
     async def defer_interaction(
@@ -386,15 +426,13 @@ class RESTClient:
         self,
         interaction_id: str,
         *,
-        content: str,
+        content: str = "",
         ephemeral: bool = False,
         embeds: list[Embed] | None = None,
     ) -> None:
-        body: dict[str, Any] = {"content": content, "ephemeral": ephemeral}
-        if embeds:
-            body["embeds"] = [e.to_dict() for e in embeds]
         await self.request(
-            "POST", f"/interactions/{_seg(interaction_id)}/followup", json=body,
+            "POST", f"/interactions/{_seg(interaction_id)}/followup",
+            json=_interaction_body(content, ephemeral, embeds),
         )
 
     # ─── Direct messages ─────────────────────────────────
@@ -491,7 +529,7 @@ class RESTClient:
 
     async def get_pinned_messages(self, tavern_id: str, channel_id: str) -> list[Message]:
         data = await self.request("GET", f"/taverns/{_seg(tavern_id)}/channels/{_seg(channel_id)}/pins")
-        return [Message.from_dict(m) for m in data]
+        return [Message.from_dict(m, tavern_id=tavern_id) for m in data or []]
 
     # ─── Reactions ───────────────────────────────────────
 
@@ -509,8 +547,9 @@ class RESTClient:
     # ─── Members (extended) ─────────────────────────────
 
     async def get_member(self, tavern_id: str, user_id: str) -> Member:
+        """One member of a tavern, a person or a bot, by their user ID."""
         data = await self.request("GET", f"/taverns/{_seg(tavern_id)}/members/{_seg(user_id)}")
-        return Member.from_dict(data)
+        return Member.from_dict(data or {}, tavern_id=tavern_id)
 
     # ─── Member Moderation ──────────────────────────────
     # Each requires the matching granted permission (KICK_MEMBERS /
@@ -520,7 +559,10 @@ class RESTClient:
     async def kick_member(
         self, tavern_id: str, user_id: str, *, reason: str | None = None,
     ) -> None:
-        """Kick a member from a tavern (requires KICK_MEMBERS)."""
+        """Kick a member from a tavern (requires KICK_MEMBERS).
+
+        ``reason`` (up to 500 characters) is kept in the tavern's audit log.
+        """
         await self.request(
             "DELETE", f"/taverns/{_seg(tavern_id)}/members/{_seg(user_id)}",
             json={"reason": reason} if reason else None,
@@ -581,18 +623,127 @@ class RESTClient:
     # ─── Search ──────────────────────────────────────────
 
     async def search_messages(
-        self, tavern_id: str, *, query: str, channel_id: str | None = None, limit: int = 25,
+        self,
+        tavern_id: str,
+        *,
+        query: str | None = None,
+        channel_id: str | None = None,
+        from_user_id: str | None = None,
+        limit: int = 25,
+        offset: str | None = None,
     ) -> list[Message]:
-        params: dict[str, str] = {"q": query, "limit": str(limit)}
-        if channel_id:
+        """Search messages, newest first (``limit`` 1 to 50, default 25).
+
+        With ``channel_id`` alone, searches that one hall (or thread) and needs
+        ``query``. Otherwise searches every hall the bot can read, with its
+        threads, narrowed by ``from_user_id`` (the sender) and ``channel_id``.
+        For the next page, pass ``offset=`` the ID of the last result.
+        """
+        params: dict[str, str] = {"limit": str(limit)}
+        if query:
+            params["q"] = query
+        if channel_id and not from_user_id:
+            if not query:
+                raise ValueError("Searching one hall needs a query")
+            if offset:
+                params["before"] = offset
             path = f"/taverns/{_seg(tavern_id)}/channels/{_seg(channel_id)}/messages/search"
         else:
+            if from_user_id:
+                params["fromUserId"] = from_user_id
+            if channel_id:
+                params["channelId"] = channel_id
+            if offset:
+                params["offset"] = offset
             path = f"/taverns/{_seg(tavern_id)}/messages/search"
         data = await self.request("GET", path, params=params)
         msgs = data.get("messages", data) if isinstance(data, dict) else data
-        return [Message.from_dict(m) for m in msgs]
+        return [Message.from_dict(m, tavern_id=tavern_id) for m in msgs or []]
 
     # ─── Roles ───────────────────────────────────────────
+    # Changing roles needs MANAGE_ROLES. A bot manages only roles below its own
+    # highest role, and gives a role only permissions the bot has itself. A
+    # newly installed bot's role sits at the bottom; the tavern owner moves it
+    # up to let the bot manage roles above it.
 
     async def get_roles(self, tavern_id: str) -> list[dict]:
         return await self.request("GET", f"/taverns/{_seg(tavern_id)}/roles")
+
+    async def create_role(
+        self,
+        tavern_id: str,
+        *,
+        name: str,
+        permissions: int | str | Permissions | None = None,
+        color: str | None = None,
+        is_hoisted: bool | None = None,
+        is_mentionable: bool | None = None,
+        unicode_emoji: str | None = None,
+    ) -> dict:
+        """Create a role (``color`` as ``"#RRGGBB"``). It is placed just below the bot's highest role."""
+        body: dict[str, Any] = {"name": name}
+        body.update(_role_fields(permissions, color, is_hoisted, is_mentionable, unicode_emoji))
+        return await self.request("POST", f"/taverns/{_seg(tavern_id)}/roles", json=body)
+
+    async def edit_role(
+        self,
+        tavern_id: str,
+        role_id: str,
+        *,
+        name: str | None = None,
+        permissions: int | str | Permissions | None = None,
+        color: str | None = None,
+        is_hoisted: bool | None = None,
+        is_mentionable: bool | None = None,
+        unicode_emoji: str | None = None,
+    ) -> dict:
+        """Change a role. Fields left as None stay as they are."""
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        body.update(_role_fields(permissions, color, is_hoisted, is_mentionable, unicode_emoji))
+        return await self.request(
+            "PATCH", f"/taverns/{_seg(tavern_id)}/roles/{_seg(role_id)}", json=body,
+        )
+
+    async def delete_role(self, tavern_id: str, role_id: str) -> None:
+        await self.request("DELETE", f"/taverns/{_seg(tavern_id)}/roles/{_seg(role_id)}")
+
+    async def reorder_roles(self, tavern_id: str, positions: dict[str, int]) -> None:
+        """Move roles: ``{role_id: position}``. Position 0 is ``@everyone``; higher is above."""
+        body = {"roles": [{"id": role_id, "position": position} for role_id, position in positions.items()]}
+        await self.request("PATCH", f"/taverns/{_seg(tavern_id)}/roles/reorder", json=body)
+
+    async def add_member_role(self, tavern_id: str, user_id: str, role_id: str) -> None:
+        """Give a member a role."""
+        await self.request(
+            "POST", f"/taverns/{_seg(tavern_id)}/members/{_seg(user_id)}/roles/{_seg(role_id)}",
+        )
+
+    async def remove_member_role(self, tavern_id: str, user_id: str, role_id: str) -> None:
+        """Take a role from a member."""
+        await self.request(
+            "DELETE", f"/taverns/{_seg(tavern_id)}/members/{_seg(user_id)}/roles/{_seg(role_id)}",
+        )
+
+
+def _role_fields(
+    permissions: int | str | Permissions | None,
+    color: str | None,
+    is_hoisted: bool | None,
+    is_mentionable: bool | None,
+    unicode_emoji: str | None,
+) -> dict[str, Any]:
+    """The optional fields of a role create or edit, as the API names them."""
+    fields: dict[str, Any] = {}
+    if permissions is not None:
+        fields["permissions"] = str(int(permissions))
+    if color is not None:
+        fields["color"] = color
+    if is_hoisted is not None:
+        fields["isHoisted"] = is_hoisted
+    if is_mentionable is not None:
+        fields["isMentionable"] = is_mentionable
+    if unicode_emoji is not None:
+        fields["unicodeEmoji"] = unicode_emoji
+    return fields

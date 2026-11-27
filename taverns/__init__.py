@@ -48,12 +48,13 @@ from .types import (
     DmMessagePage,
     Member,
     Message,
+    MessagePage,
     Tavern,
     User,
 )
 from .webhook import verify_webhook_signature
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     # Core
@@ -67,6 +68,7 @@ __all__ = [
     "Channel",
     "Member",
     "Message",
+    "MessagePage",
     "BotCommand",
     "BotSelf",
     "CommandOption",

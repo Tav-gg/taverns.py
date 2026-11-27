@@ -4,6 +4,67 @@ All notable changes to taverns.py are listed here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) (while the version is 0.x, a minor release can break things).
 
+## [0.4.0] - Unreleased
+
+This release matches the Taverns API as it works now: message content as on Discord, bots that manage
+roles, and the gateway's ping and reconnect rules.
+
+### Added
+
+- **Roles.** `create_role`, `edit_role`, `delete_role`, `reorder_roles`, `add_member_role` and
+  `remove_member_role` on `client.rest`. They need `MANAGE_ROLES`. As on Discord, a bot manages only roles
+  below its own highest role and gives a role only permissions it has itself. A newly installed bot's role
+  starts at the bottom of the list, so the tavern owner moves it up for the bot to manage other roles.
+- `Member` has more of what the tavern shows: `id` (the member's own ID), `user` (name and avatar),
+  `roles`, `joined_at`, `is_owner`, `status`, and `display_name` (the nickname, else the person's name).
+- `rest.get_members(tavern_id, query=..., limit=...)` finds members by name or nickname.
+- `rest.search_messages` takes `from_user_id`, and `offset` for the next page (the ID of the last result).
+  `query` may be left out when searching the whole tavern by sender.
+- `rest.get_messages` takes `before` for older messages, and the new `MessagePage` type.
+- `Channel.category_id`.
+
+### Changed
+
+- **Breaking:** `rest.get_messages` returns a `MessagePage` (`messages`, oldest first, and `has_more`)
+  instead of a list. It never worked before (see Fixed).
+- **Breaking:** `rest.edit_message` takes only `content`, the one thing a message edit can change. Passing
+  `embeds` made the request fail. It now returns the edited `Message`.
+- **Breaking:** close codes 4001, 4003 and 4004 no longer stop the client. The gateway never sends them: it
+  refuses a token only when the connection opens (HTTP 401 or 403), and the client still raises
+  `AuthenticationError` then. Every other close is followed by a reconnect.
+- **Breaking:** `tavern_role_created` arrives as `role_create` (`on_role_create`), like `role_update` and
+  `role_delete`, and only with the `ROLES` intent.
+- Every 30 seconds the client sends a heartbeat and a `ping`. When nothing has come from the gateway for 75
+  seconds, it opens a new connection. `pong` answers are not passed to your handlers.
+- When the gateway closes a connection on purpose (its age limit of about 2 hours, close code 1000, or a
+  server restart, 1012), the client is back within a second. After other closes it waits 1, 2, 4 and up to
+  30 seconds, starting over once a connection has lasted a minute.
+- Interaction replies and follow-ups can be embeds alone: empty `content` is left out when `embeds` are
+  given.
+- `kick_member(reason=...)`: the reason is kept in the tavern's audit log.
+- Messages from `send_message`, `edit_message`, `get_messages`, `get_pinned_messages` and
+  `search_messages` carry their `tavern_id`.
+- Without the `MESSAGE_CONTENT` intent, REST answers now leave out the content, embeds and attachments of
+  other people's messages too, as gateway events do, unless the message mentions the bot. Turn the intent on
+  in the Intents tab of your bot's page in the Developer Portal. The README explains the rule.
+- The `Intents.DEFAULT` comment says what it holds: every non-privileged intent except `INTERACTIONS`. Its
+  value (`0x17FF9`) is unchanged.
+
+### Fixed
+
+- `rest.get_channels` always returned an empty list, so the client's hall cache stayed empty and
+  `client.voice.join(hall_id)` needed `tavern_id=`. Halls are read from the answer's `channels` now.
+- `rest.get_messages` failed on every call.
+- `rest.get_member` now returns the member, a person or a bot, with the same details as the member list.
+- `on_member_join` got a `Member` with no user ID and no name. It now gets the person, with their name,
+  roles and online state, or the bot when a bot is installed.
+- The `channel_delete` event left the hall in the client's cache.
+- A hall update that carries only what changed (such as a hall becoming private) dropped the gateway
+  connection. It now updates the cached hall. An event the SDK cannot read is logged, and the connection
+  stays open.
+- `bot_installed` never added the tavern to `client.taverns`. It now does, with the tavern's name and the
+  bot's permissions, and `bot_permissions_updated` updates them.
+
 ## [0.3.0] - 2026-11-18
 
 This release also contains the member moderation methods from 0.2.4, which was tagged but never
@@ -110,5 +171,6 @@ published to PyPI.
 
 Earlier versions are described in the git history.
 
+[0.4.0]: https://github.com/Tav-gg/taverns.py/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Tav-gg/taverns.py/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/Tav-gg/taverns.py/tree/v0.2.3

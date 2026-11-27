@@ -65,40 +65,89 @@ class Channel:
     tavern_id: str
     position: int = 0
     topic: str | None = None
+    category_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict) -> Channel:
         return cls(
             id=data["id"],
-            name=data["name"],
+            name=data.get("name") or "",
             type=data.get("type", "TEXT"),
             tavern_id=data.get("tavernId", ""),
             position=data.get("position", 0),
             topic=data.get("topic"),
+            category_id=data.get("categoryId"),
         )
 
 
 @dataclass
 class Member:
+    """A member of a tavern, a person or a bot (``get_member``, ``get_members``
+    and the ``member_join`` event)."""
     user_id: str
     tavern_id: str
     nickname: str | None = None
     is_online: bool = False
     is_bot: bool = False
+    #: The member's own ID in this tavern (not the user ID).
+    id: str = ""
+    #: The person or bot: name, avatar and so on.
+    user: User | None = None
+    #: The member's roles, highest first: ``{"id", "name", "color", "position", ...}``.
+    roles: list[dict] = field(default_factory=list)
+    joined_at: str | None = None
+    is_owner: bool = False
+    #: ``"ONLINE"``, ``"IDLE"`` or ``"DND"`` while they show as online, else None.
+    status: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        """The name the tavern shows: the nickname, else the person's own name."""
+        if self.nickname:
+            return self.nickname
+        return self.user.display_name if self.user else ""
 
     @classmethod
-    def from_dict(cls, data: dict) -> Member:
+    def from_dict(cls, data: dict, *, tavern_id: str = "") -> Member:
+        is_bot = bool(data.get("isBot", False))
+        user_data = data.get("user")
+        user: User | None = None
+        if isinstance(user_data, dict) and user_data.get("id"):
+            user = User.from_dict(user_data)
+        elif data.get("userId") and "displayName" in data:
+            # A member search result carries the name on the member itself
+            user = User(
+                id=data["userId"],
+                display_name=data.get("displayName") or "",
+                avatar_url=data.get("avatarUrl"),
+            )
+        if user is not None and is_bot:
+            user.is_bot = True
+        roles = data.get("roles")
+        if roles is None and isinstance(user_data, dict):
+            roles = user_data.get("roles")
         return cls(
-            user_id=data.get("userId", ""),
-            tavern_id=data.get("tavernId", ""),
+            user_id=data.get("userId") or (user.id if user else ""),
+            tavern_id=data.get("tavernId") or tavern_id,
             nickname=data.get("nickname"),
-            is_online=data.get("isOnline", False),
-            is_bot=data.get("isBot", False),
+            is_online=bool(data.get("isOnline", False)),
+            is_bot=is_bot,
+            id=data.get("id") or "",
+            user=user,
+            roles=list(roles or []),
+            joined_at=data.get("joinedAt"),
+            is_owner=bool(data.get("isOwner", False)),
+            status=data.get("status"),
         )
 
 
 @dataclass
 class Message:
+    """A message in a tavern hall.
+
+    Without the ``MESSAGE_CONTENT`` intent, ``content`` is empty for messages
+    that are not the bot's own and do not mention it.
+    """
     id: str
     channel_id: str
     content: str
@@ -109,17 +158,32 @@ class Message:
     sender_is_bot: bool = False
 
     @classmethod
-    def from_dict(cls, data: dict) -> Message:
-        sender = data.get("sender", {})
+    def from_dict(cls, data: dict, *, tavern_id: str = "") -> Message:
+        sender = data.get("sender") or {}
         return cls(
             id=data.get("id", ""),
             channel_id=data.get("channelId", ""),
-            content=data.get("content", ""),
+            content=data.get("content") or "",
             sender_id=sender.get("id", data.get("senderId", "")),
-            tavern_id=data.get("tavernId", ""),
+            tavern_id=data.get("tavernId") or tavern_id,
             reply_to_id=data.get("replyToId"),
-            metadata=data.get("metadata", {}),
+            metadata=data.get("metadata") or {},
             sender_is_bot=sender.get("isBot", False),
+        )
+
+
+@dataclass
+class MessagePage:
+    """One page of a hall's history, oldest first (``get_messages``)."""
+    messages: list[Message]
+    #: True when older messages exist: pass ``before=messages[0].id`` for them.
+    has_more: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict, *, tavern_id: str = "") -> MessagePage:
+        return cls(
+            messages=[Message.from_dict(m, tavern_id=tavern_id) for m in data.get("messages") or []],
+            has_more=bool(data.get("hasMore", False)),
         )
 
 
